@@ -25,6 +25,7 @@
 #' @param scale           covariance biplot (scale = 1), form biplot (scale = 0). When scale = 1, the inner product between the variables approximates the covariance and the distance between the points approximates the Mahalanobis distance.
 #' @param obs.scale       scale factor to apply to observations
 #' @param var.scale       scale factor to apply to variables
+#' @param var.labels      a list of labels to show from the biplot
 #' @param pc.biplot       for compatibility with biplot.princomp()
 #' @param groups          optional factor variable indicating the groups that the observations belong to. If provided the points will be colored according to groups
 #' @param ellipse         draw a normal data ellipse for each group?
@@ -37,6 +38,12 @@
 #' @param varname.size    size of the text for variable names
 #' @param varname.adjust  adjustment factor the placement of the variable names, >= 1 means farther from the arrow
 #' @param varname.abbrev  whether or not to abbreviate the variable names
+#' @param minor.alpha the alpha value to use for the variables that are not
+#'   included in var.labels
+#' @param label.samples show the names of the samples
+#' @param plot.points plot points even if labels are present
+#' @param top.var plot the top N var loadings (mutually exclusive to var.labels)
+#' @param equal.coords plot such that the scale of x and y are equal
 #'
 #' @return                a ggplot2 plot
 #' @export
@@ -45,14 +52,16 @@
 #'   wine.pca <- prcomp(wine, scale. = TRUE)
 #'   print(ggbiplot(wine.pca, obs.scale = 1, var.scale = 1, groups = wine.class, ellipse = TRUE, circle = TRUE))
 #'
-ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE, 
-                      obs.scale = 1 - scale, var.scale = scale, 
-                      groups = NULL, ellipse = FALSE, ellipse.prob = 0.68, 
-                      labels = NULL, labels.size = 3, alpha = 1, 
-                      var.axes = TRUE, 
-                      circle = FALSE, circle.prob = 0.69, 
-                      varname.size = 3, varname.adjust = 1.5, 
-                      varname.abbrev = FALSE, ...)
+ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
+                      obs.scale = 1 - scale, var.labels=NULL, var.scale = scale, groups = NULL,
+                      ellipse = FALSE, ellipse.prob = 0.68,
+                      labels = NULL, labels.size = 3, alpha = 1,
+                      var.axes = TRUE,
+                      circle = FALSE, circle.prob = 0.69,
+                      varname.size = 3, varname.adjust = 1.5,
+                      varname.abbrev = FALSE,
+                      minor.alpha=.4, minor.color='gray', label.samples=F, plot.points=F,
+                      top.var=NULL, equal.coords=F, ...)
 {
   library(ggplot2)
   library(plyr)
@@ -60,6 +69,9 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
   library(grid)
 
   stopifnot(length(choices) == 2)
+  if(!is.null(top.var) && !is.null(var.labels)) {
+    stop("You may only provide one of top.var or var.labels")
+  }
 
   # Recover the SVD
  if(inherits(pcobj, 'prcomp')){
@@ -104,12 +116,13 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
 
   # Scale the radius of the correlation circle so that it corresponds to 
   # a data ellipse for the standardized PC scores
-  r <- sqrt(qchisq(circle.prob, df = 2)) * prod(colMeans(df.u^2))^(1/4)
+  if(circle) {
+    r <- sqrt(qchisq(circle.prob, df = 2)) * prod(colMeans(df.u^2))^(1/4)
 
-  # Scale directions
-  v.scale <- rowSums(v^2)
-  df.v <- r * df.v / sqrt(max(v.scale))
-
+    # Scale directions
+    v.scale <- rowSums(v^2)
+    df.v <- r * df.v/sqrt(max(v.scale))
+  }
   # Change the labels for the axes
   if(obs.scale == 0) {
     u.axis.labs <- paste('standardized PC', choices, sep='')
@@ -119,12 +132,14 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
 
   # Append the proportion of explained variance to the axis labels
   u.axis.labs <- paste(u.axis.labs, 
-                       sprintf('(%0.1f%% explained var.)', 
+                       sprintf('(%0.1f%% var.)',
                                100 * pcobj$sdev[choices]^2/sum(pcobj$sdev^2)))
 
   # Score Labels
   if(!is.null(labels)) {
     df.u$labels <- labels
+  } else if(label.samples) {
+    df.u$labels <- rownames(df.u)
   }
 
   # Grouping variable
@@ -145,8 +160,14 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
 
   # Base plot
   g <- ggplot(data = df.u, aes(x = xvar, y = yvar)) + 
-          xlab(u.axis.labs[1]) + ylab(u.axis.labs[2]) + coord_equal()
-
+          xlab(u.axis.labs[1]) + ylab(u.axis.labs[2])
+  if(equal.coords) {
+    g <- g + coord_equal()
+  }
+  if(!is.null(top.var)) {
+    df.v$size <- sqrt(df.v$xvar^2 + df.v$yvar^2)
+    var.labels <- rownames(df.v[order(df.v$size, decreasing = T),])[1:top.var]
+  }
   if(var.axes) {
     # Draw circle
     if(circle) 
@@ -158,24 +179,29 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
     }
 
     # Draw directions
+    df.v$major = if(is.null(var.labels)) T else df.v$varname %in% var.labels
+    print(unique(df.v$major))
     g <- g +
       geom_segment(data = df.v,
-                   aes(x = 0, y = 0, xend = xvar, yend = yvar),
+                   aes(x = 0, y = 0, xend = xvar, yend = yvar, alpha=major, color=major),
                    arrow = arrow(length = unit(1/2, 'picas')), 
-                   color = muted('red'))
+                          show.legend = F) +
+      scale_color_manual(values=c(minor.color, muted('red'))) +
+      scale_alpha_manual(values=c(minor.alpha, 1))
   }
 
   # Draw either labels or points
   if(!is.null(df.u$labels)) {
     if(!is.null(df.u$groups)) {
-      g <- g + geom_text(aes(label = labels, color = groups), 
+      g <- g + geom_text_repel(aes(label = labels, color = groups), 
                          size = labels.size)
     } else {
-      g <- g + geom_text(aes(label = labels), size = labels.size)      
+      g <- g + geom_text_repel(aes(label = labels), size = labels.size)
     }
-  } else {
+  } 
+  if(is.null(df.u$labels) || plot.points) {
     if(!is.null(df.u$groups)) {
-      g <- g + geom_point(aes(color = groups), alpha = alpha)
+      g <- g + geom_point(aes(fill = groups), shape=21, alpha = alpha) 
     } else {
       g <- g + geom_point(alpha = alpha)      
     }
@@ -197,16 +223,18 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
                  groups = x$groups[1])
     })
     names(ell)[1:2] <- c('xvar', 'yvar')
-    g <- g + geom_path(data = ell, aes(color = groups, group = groups))
+    g <- g + geom_path(data = ell, aes(group = groups))
   }
 
   # Label the variable axes
   if(var.axes) {
+    df.vl <- if(is.null(var.labels)) df.v else with(df.v, df.v[varname %in% var.labels,])
     g <- g + 
-    geom_text(data = df.v, 
+    geom_text(data = df.vl,
               aes(label = varname, x = xvar, y = yvar, 
                   angle = angle, hjust = hjust), 
-              color = 'darkred', size = varname.size)
+              color = 'darkred', size = varname.size,
+              fontface="bold")
   }
   # Change the name of the legend for groups
   # if(!is.null(groups)) {
