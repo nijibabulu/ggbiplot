@@ -23,6 +23,7 @@
 #' @param pcobj           an object returned by prcomp() or princomp()
 #' @param choices         which PCs to plot
 #' @param scale           covariance biplot (scale = 1), form biplot (scale = 0). When scale = 1, the inner product between the variables approximates the covariance and the distance between the points approximates the Mahalanobis distance.
+#' @param center          center embeddings prior to plotting
 #' @param obs.scale       scale factor to apply to observations
 #' @param var.scale       scale factor to apply to variables
 #' @param var.labels      a list of labels to show from the biplot
@@ -52,31 +53,32 @@
 #'   wine.pca <- prcomp(wine, scale. = TRUE)
 #'   print(ggbiplot(wine.pca, obs.scale = 1, var.scale = 1, groups = wine.class, ellipse = TRUE, circle = TRUE))
 #'
-ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
-                      obs.scale = 1 - scale, var.labels=NULL, var.scale = scale, groups = NULL,
-                      ellipse = FALSE, ellipse.prob = 0.68,
-                      labels = NULL, labels.size = 3, alpha = 1,
-                      var.axes = TRUE,
-                      circle = FALSE, circle.prob = 0.69,
-                      varname.size = 3, varname.adjust = 1.5,
-                      varname.abbrev = FALSE,
-                      minor.alpha=.4, minor.color='gray', label.samples=F, plot.points=F,
-                      top.var=NULL, equal.coords=F, ...)
+ggbiplot <- function(pcobj, choices = 1:2, scale = 1, center=FALSE, pc.biplot = TRUE,
+                     obs.scale = 1 - scale, var.labels=NULL, var.scale = scale, groups = NULL,
+                     ellipse = FALSE, ellipse.prob = 0.68,
+                     labels = NULL, labels.size = 3, alpha = 1,
+                     var.axes = TRUE,
+                     circle = FALSE, circle.prob = 0.69,
+                     varname.size = 3, varname.adjust = 1.5,
+                     varname.abbrev = FALSE,
+                     minor.alpha=.4, label.samples=F, plot.points=F,
+                     point.size=1,
+                     top.var=NULL, equal.coords=F, ...)
 {
   library(ggplot2)
   library(plyr)
   library(scales)
   library(grid)
-
+  
   stopifnot(length(choices) == 2)
   if(!is.null(top.var) && !is.null(var.labels)) {
     stop("You may only provide one of top.var or var.labels")
   }
-
+  
   # Recover the SVD
- if(inherits(pcobj, 'prcomp')){
+  if(inherits(pcobj, 'prcomp')){
     nobs.factor <- sqrt(nrow(pcobj$x) - 1)
-    d <- pcobj$sdev
+    d <- pcobj$sdev[1:ncol(pcobj$x)]
     u <- sweep(pcobj$x, 2, 1 / (d * nobs.factor), FUN = '*')
     v <- pcobj$rotation
   } else if(inherits(pcobj, 'princomp')) {
@@ -90,13 +92,22 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
     u <- sweep(pcobj$ind$coord, 2, 1 / (d * nobs.factor), FUN = '*')
     v <- sweep(pcobj$var$coord,2,sqrt(pcobj$eig[1:ncol(pcobj$var$coord),1]),FUN="/")
   } else if(inherits(pcobj, "lda")) {
-      nobs.factor <- sqrt(pcobj$N)
-      d <- pcobj$svd
-      u <- predict(pcobj)$x/nobs.factor
-      v <- pcobj$scaling
-      d.total <- sum(d^2)
-  } else {
+    nobs.factor <- sqrt(pcobj$N)
+    d <- pcobj$svd
+    u <- predict(pcobj)$x/nobs.factor
+    v <- pcobj$scaling
+    d.total <- sum(d^2)
+  } else if(inherits(pcobj, "DimReduc")) {
+    nobs.factor <- sqrt(nrow(Embeddings(pcobj)) - 1)
+    d <- Stdev(pcobj)
+    u <- sweep(Embeddings(pcobj), 2, 1 / (d * nobs.factor), FUN = '*')
+    v <- Loadings(pcobj)
+  }else {
     stop('Expected a object of class prcomp, princomp, PCA, or lda')
+  }
+
+  if(center) {
+    u <- scale(u, center=TRUE, scale=FALSE)
   }
 
   # Scores
@@ -160,7 +171,7 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
 
   # Base plot
   g <- ggplot(data = df.u, aes(x = xvar, y = yvar)) + 
-          xlab(u.axis.labs[1]) + ylab(u.axis.labs[2])
+    xlab(u.axis.labs[1]) + ylab(u.axis.labs[2])
   if(equal.coords) {
     g <- g + coord_equal()
   }
@@ -177,16 +188,14 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
       g <- g + geom_path(data = circle, color = muted('white'), 
                          size = 1/2, alpha = 1/3)
     }
-
+    
     # Draw directions
     df.v$major = if(is.null(var.labels)) T else df.v$varname %in% var.labels
-    print(unique(df.v$major))
     g <- g +
       geom_segment(data = df.v,
-                   aes(x = 0, y = 0, xend = xvar, yend = yvar, alpha=major, color=major),
+                   aes(x = 0, y = 0, xend = xvar, yend = yvar, alpha=major),#, color=major),
                    arrow = arrow(length = unit(1/2, 'picas')), 
-                          show.legend = F) +
-      scale_color_manual(values=c(minor.color, muted('red'))) +
+                   show.legend = F) +
       scale_alpha_manual(values=c(minor.alpha, 1))
   }
 
@@ -194,16 +203,16 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
   if(!is.null(df.u$labels)) {
     if(!is.null(df.u$groups)) {
       g <- g + geom_text_repel(aes(label = labels, color = groups), 
-                         size = labels.size)
+                               size = labels.size)
     } else {
       g <- g + geom_text_repel(aes(label = labels), size = labels.size)
     }
   } 
   if(is.null(df.u$labels) || plot.points) {
     if(!is.null(df.u$groups)) {
-      g <- g + geom_point(aes(fill = groups), shape=21, alpha = alpha) 
+      g <- g + geom_point(aes(color = groups), size=point.size, alpha = alpha) 
     } else {
-      g <- g + geom_point(alpha = alpha)      
+      g <- g + geom_point(size=point.size, alpha = alpha)      
     }
   }
 
@@ -230,11 +239,11 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
   if(var.axes) {
     df.vl <- if(is.null(var.labels)) df.v else with(df.v, df.v[varname %in% var.labels,])
     g <- g + 
-    geom_text(data = df.vl,
-              aes(label = varname, x = xvar, y = yvar, 
-                  angle = angle, hjust = hjust), 
-              color = 'darkred', size = varname.size,
-              fontface="bold")
+      geom_text(data = df.vl,
+                aes(label = varname, x = xvar, y = yvar, 
+                    angle = angle, hjust = hjust), 
+                color = 'darkred', size = varname.size,
+                fontface="bold")
   }
   # Change the name of the legend for groups
   # if(!is.null(groups)) {
