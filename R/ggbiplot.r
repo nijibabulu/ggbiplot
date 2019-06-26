@@ -133,7 +133,7 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
   # Append the proportion of explained variance to the axis labels
   u.axis.labs <- paste(u.axis.labs, 
                        sprintf('(%0.1f%% var.)',
-                               100 * pcobj$sdev[choices]^2/sum(pcobj$sdev^2)))
+                               100 * d[choices]^2/sum(d^2)))
 
   # Score Labels
   if(!is.null(labels)) {
